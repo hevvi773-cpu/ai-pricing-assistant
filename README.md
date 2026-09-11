@@ -76,7 +76,7 @@ AI定价+风控助手用大模型 + RAG 检索解决这个问题：
 | 数据检索 | RAG（Mercari 公开数据集） |
 
 ### 数据
-- **Mercari Price Suggestion Challenge**：Kaggle 公开数据集，150 万条二手商品成交记录
+- **Mercari Price Suggestion Challenge**：Kaggle 公开数据集，已清洗入库为 `data/mercari_cleaned.json`（15.4MB）
 - 字段：商品标题、描述、品类、品牌、成色、价格
 - 用途：RAG 检索库，为 AI 定价提供真实成交数据参考
 
@@ -101,7 +101,7 @@ ai-pricing-assistant/
 │   ├── app/
 │   │   └── main.py              # API 入口（/api/price, /api/price/adjust）
 │   └── requirements.txt
-├── data/                        # 数据集（Mercari train.tsv）
+├── data/                        # 数据集（mercari_cleaned.json）
 └── README.md
 ```
 
@@ -214,16 +214,14 @@ AI 智能估价
 ## ⚠️ 项目状态
 
 - ✅ 前端核心页面完成（输入表单 + 结果展示 + 双滑块 + 对话微调）
-- ✅ 后端 API 框架完成（FastAPI + mock 定价逻辑）
-- ✅ 项目结构和技术栈确定
-- 🚧 大模型接入（通义千问）——待开发
-- 🚧 Mercari 数据集清洗和 RAG 检索——待开发（数据集下载中，Kaggle 身份验证审核中）
-- 🚧 图片识别（多模态大模型）——待开发
-- 🚧 部署上线——待开发
+- ✅ 后端 API 框架完成（FastAPI + 定价引擎）
+- ✅ 数据集已入库（`data/mercari_cleaned.json`，15.4MB，Mercari 清洗后成交数据）
+- 🚧 大模型接入（通义千问 / qwen-plus）——已实现调用逻辑，未配置 API Key 时自动降级为模板生成
+- 🚧 RAG 检索逻辑——待开发（数据集已就绪，检索代码未实现）
+- 🚧 图片识别（多模态大模型）——未实现（输入表单暂不含图片上传）
+- ⚪ 未部署上线（当前仅支持本地运行）
 
-> 当前版本使用 mock 定价逻辑，可正常运行和演示。接入真实大模型和数据集后即可生产使用。
-
----
+> 当前版本在未配置大模型 API Key 时使用模板定价逻辑，可正常运行和演示。
 
 ## 📄 License
 
