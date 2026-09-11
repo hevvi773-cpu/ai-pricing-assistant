@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from app.services.pricing_engine import get_pricing_engine
 from app.services.llm_service import get_llm_service
 
-app = FastAPI(title="AI Pricing Assistant API", version="0.2.0")
+app = FastAPI(title="AI Pricing & Risk Assistant API", version="0.2.0")
 
 app.add_middleware(
     CORSMiddleware,

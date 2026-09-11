@@ -12,8 +12,7 @@ build/
 .env.local
 .env.*.local
 
-# Data files (large)
-data/mercari_cleaned.json
+# Data files (large) - mercari_cleaned.json 已纳入仓库（RAG 数据集）
 data/*.tsv
 data/*.7z
 data/*.zip

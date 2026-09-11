@@ -89,8 +89,8 @@ export default function PricingPage() {
             <Tag className="w-5 h-5 text-white" />
           </div>
           <div>
-            <h1 className="text-xl font-bold">AI 定价助手</h1>
-            <p className="text-sm text-gray-500">二手商品智能估价 · AI-Native</p>
+            <h1 className="text-xl font-bold">AI定价+风控助手</h1>
+            <p className="text-sm text-gray-500">二手商品智能估价 + 交易风控 · AI-Native</p>
           </div>
         </div>
       </header>
