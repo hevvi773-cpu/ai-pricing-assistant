@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 定价助手 - 管理后台</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f7fa; color: #333; padding: 20px; }
+.container { max-width: 800px; margin: 0 auto; }
+h1 { font-size: 24px; margin-bottom: 20px; color: #1a1a2e; }
+.card { background: #fff; border-radius: 12px; padding: 24px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+.card h2 { font-size: 18px; margin-bottom: 16px; color: #1a1a2e; display: flex; align-items: center; gap: 8px; }
+.card h2 .icon { font-size: 20px; }
+.form-group { margin-bottom: 14px; }
+.form-group label { display: block; font-size: 14px; color: #666; margin-bottom: 6px; }
+.form-group input, .form-group textarea, .form-group select { width: 100%; padding: 10px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; font-family: inherit; }
+.form-group input:focus, .form-group textarea:focus { outline: none; border-color: #4f6ef7; }
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.btn { padding: 10px 20px; border: none; border-radius: 8px; font-size: 14px; cursor: pointer; font-weight: 500; transition: all 0.2s; }
+.btn-primary { background: #4f6ef7; color: #fff; }
+.btn-primary:hover { background: #3b5de7; }
+.btn-success { background: #10b981; color: #fff; }
+.btn-success:hover { background: #059669; }
+.btn-warning { background: #f59e0b; color: #fff; }
+.btn-warning:hover { background: #d97706; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.result { margin-top: 16px; padding: 16px; border-radius: 8px; font-size: 14px; line-height: 1.6; }
+.result-high { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; }
+.result-medium { background: #fffbeb; border: 1px solid #fde68a; color: #92400e; }
+.result-low { background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; }
+.result-info { background: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af; }
+.result .label { font-weight: 600; margin-right: 8px; }
+.result .price { font-size: 28px; font-weight: 700; color: #4f6ef7; }
+.result .range { color: #666; font-size: 14px; }
+.tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.tag { padding: 2px 8px; border-radius: 4px; font-size: 12px; background: rgba(0,0,0,0.08); }
+.tag-high { background: #fecaca; color: #991b1b; }
+.tag-medium { background: #fde68a; color: #92400e; }
+.muted { color: #999; font-size: 12px; }
+.back-link { display: inline-block; margin-bottom: 16px; color: #4f6ef7; text-decoration: none; font-size: 14px; }
+.back-link:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="container">
+  <a href="/" class="back-link">← 返回定价页面</a>
+  <h1>🛠️ AI 定价助手 · 管理后台</h1>
+
+  <!-- 配置管理 -->
+  <div class="card">
+    <h2><span class="icon">⚙️</span> 大模型配置</h2>
+    <div class="form-group">
+      <label>API Key（密钥）</label>
+      <input type="password" id="apiKey" placeholder="sk-xxxxxxxx">
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>模型名称</label>
+        <select id="modelName">
+          <option value="qwen-turbo">qwen-turbo（快速）</option>
+          <option value="qwen-plus">qwen-plus（均衡）</option>
+          <option value="qwen-max">qwen-max（最强）</option>
+          <option value="qwen-long">qwen-long（长文本）</option>
+          <option value="qwen-vl-plus">qwen-vl-plus（多模态）</option>
+          <option value="qwen-vl-max">qwen-vl-max（多模态最强）</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>接口地址（Base URL）</label>
+        <input type="text" id="baseUrl" placeholder="https://...">
+      </div>
+    </div>
+    <button class="btn btn-primary" onclick="loadConfig()">📥 读取当前配置</button>
+    <button class="btn btn-success" onclick="saveConfig()">💾 保存配置</button>
+    <div id="configResult"></div>
+  </div>
+
+  <!-- 风控测试 -->
+  <div class="card">
+    <h2><span class="icon">🛡️</span> 风控检测测试</h2>
+    <div class="form-group">
+      <label>商品名称</label>
+      <input type="text" id="riskProductName" placeholder="">
+    </div>
+    <div class="form-group">
+      <label>商品描述（可选）</label>
+      <textarea id="riskDescription" rows="2" placeholder=""></textarea>
+    </div>
+    <button class="btn btn-warning" onclick="testRisk()">🔍 开始检测</button>
+    <div id="riskResult"></div>
+  </div>
+
+  <!-- 定价测试 -->
+  <div class="card">
+    <h2><span class="icon">💰</span> AI 定价测试</h2>
+    <div class="form-group">
+      <label>商品名称</label>
+      <input type="text" id="priceProductName" placeholder="">
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>品类</label>
+        <select id="priceCategory">
+          <option value="">不指定</option>
+          <option value="手机数码">手机数码</option>
+          <option value="电脑平板">电脑平板</option>
+          <option value="教材书籍">教材书籍</option>
+          <option value="生活用品">生活用品</option>
+          <option value="服饰鞋包">服饰鞋包</option>
+          <option value="运动户外">运动户外</option>
+          <option value="其他">其他</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>成色</label>
+        <select id="priceCondition">
+          <option value="几乎全新">几乎全新</option>
+          <option value="全新">全新</option>
+          <option value="轻微使用痕迹">轻微使用痕迹</option>
+          <option value="有明显使用痕迹">有明显使用痕迹</option>
+        </select>
+      </div>
+    </div>
+    <button class="btn btn-primary" onclick="testPrice()">🤖 AI 智能估价</button>
+    <div id="priceResult"></div>
+  </div>
+
+  <p class="muted" style="text-align:center; margin-top:20px;">
+    管理后台 v1.0 · 所有操作实时生效，无需重启服务
+  </p>
+</div>
+
+<script>
+const API_BASE = 'http://localhost:8000';
+
+function showResult(elementId, html, type) {
+  const el = document.getElementById(elementId);
+  el.innerHTML = '<div class="result result-' + type + '">' + html + '</div>';
+}
+
+// ========== 配置管理 ==========
+async function loadConfig() {
+  try {
+    const res = await fetch(API_BASE + '/api/config/llm');
+    const data = await res.json();
+    document.getElementById('apiKey').value = '';
+    document.getElementById('modelName').value = data.model_name || '';
+    document.getElementById('baseUrl').value = data.base_url || '';
+    const status = data.is_configured ? '✅ 已配置' : '⚠️ 未配置（定价理由用模板生成）';
+    showResult('configResult',
+      '<span class="label">当前状态：</span>' + status + '<br>' +
+      '<span class="label">模型：</span>' + (data.model_name || '未设置') + '<br>' +
+      '<span class="label">接口：</span>' + (data.base_url || '未设置') + '<br>' +
+      '<span class="label">API Key：</span>' + (data.api_key || '空') + '（脱敏显示）',
+      'info');
+  } catch (e) {
+    showResult('configResult', '❌ 读取失败：' + e.message, 'high');
+  }
+}
+
+async function saveConfig() {
+  const apiKey = document.getElementById('apiKey').value.trim();
+  const modelName = document.getElementById('modelName').value.trim();
+  const baseUrl = document.getElementById('baseUrl').value.trim();
+
+  const body = {};
+  if (apiKey) body.api_key = apiKey;
+  if (modelName) body.model_name = modelName;
+  if (baseUrl) body.base_url = baseUrl;
+
+  if (Object.keys(body).length === 0) {
+    showResult('configResult', '⚠️ 请至少填写一项要修改的内容', 'medium');
+    return;
+  }
+
+  try {
+    const res = await fetch(API_BASE + '/api/config/llm', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    showResult('configResult',
+      '✅ 配置保存成功！<br>' +
+      '<span class="label">模型：</span>' + data.model_name + '<br>' +
+      '<span class="label">状态：</span>' + (data.is_configured ? '已配置' : '未配置') + '<br>' +
+      '<span class="muted">新配置立即生效，无需重启</span>',
+      'low');
+    document.getElementById('apiKey').value = '';
+  } catch (e) {
+    showResult('configResult', '❌ 保存失败：' + e.message, 'high');
+  }
+}
+
+// ========== 风控测试 ==========
+async function testRisk() {
+  const productName = document.getElementById('riskProductName').value.trim();
+  const description = document.getElementById('riskDescription').value.trim();
+
+  if (!productName) {
+    showResult('riskResult', '⚠️ 请输入商品名称', 'medium');
+    return;
+  }
+
+  try {
+    const res = await fetch(API_BASE + '/api/risk/check', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ product_name: productName, description: description })
+    });
+    const data = await res.json();
+
+    let type = 'low';
+    let statusText = '✅ 正常，未检测到违规';
+    if (data.risk_level === 'high') {
+      type = 'high';
+      statusText = '🚫 检测到违禁词，不提供定价服务';
+    } else if (data.risk_level === 'medium') {
+      type = 'medium';
+      statusText = '⚠️ 检测到站外引流，请注意交易安全';
+    }
+
+    showResult('riskResult', statusText, type);
+  } catch (e) {
+    showResult('riskResult', '❌ 检测失败：' + e.message, 'high');
+  }
+}
+
+// ========== 定价测试 ==========
+async function testPrice() {
+  const productName = document.getElementById('priceProductName').value.trim();
+  const category = document.getElementById('priceCategory').value;
+  const condition = document.getElementById('priceCondition').value;
+
+  if (!productName) {
+    showResult('priceResult', '⚠️ 请输入商品名称', 'medium');
+    return;
+  }
+
+  const btn = event.target;
+  btn.disabled = true;
+  btn.textContent = '🤖 AI 正在估价...';
+
+  try {
+    const res = await fetch(API_BASE + '/api/price', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ product_name: productName, category: category, condition: condition })
+    });
+    const data = await res.json();
+
+    // 风控结果
+    let riskType = 'info';
+    let riskText = '';
+    if (data.risk_check) {
+      if (data.risk_check.risk_level === 'high') {
+        riskType = 'high';
+      } else if (data.risk_check.risk_level === 'medium') {
+        riskType = 'medium';
+        riskText = '<div style="margin-top:12px; padding-top:12px; border-top:1px solid #fde68a;">⚠️ 检测到站外引流，请注意交易安全</div>';
+      }
+    }
+
+    if (data.risk_check && data.risk_check.risk_level === 'high') {
+      showResult('priceResult',
+        '🚫 检测到违禁词，不提供定价服务',
+        'high');
+    } else {
+      const confText = data.confidence === 'high' ? '高置信度' : (data.confidence === 'medium' ? '中置信度' : '低置信度');
+      const priceText = (data.suggested_price && data.suggested_price > 0) ? '¥' + data.suggested_price : '--';
+      const rangeText = (data.price_min && data.price_min > 0) ? '¥' + data.price_min + ' ~ ¥' + data.price_max : '--';
+      showResult('priceResult',
+        '<div class="price">' + priceText + '</div>' +
+        '<div class="range">价格区间：' + rangeText + ' · ' + confText + '</div>' +
+        '<div style="margin-top:12px;"><span class="label">AI 理由：</span>' + (data.reasoning || '无') + '</div>' +
+        riskText,
+        riskType === 'info' ? 'low' : riskType);
+    }
+  } catch (e) {
+    showResult('priceResult', '❌ 估价失败：' + e.message, 'high');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🤖 AI 智能估价';
+  }
+}
+
+// 页面加载时自动读取配置
+window.onload = function() {
+  loadConfig();
+};
+</script>
+</body>
+</html>

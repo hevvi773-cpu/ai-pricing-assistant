@@ -1,7 +1,7 @@
-import os
+"""大模型服务：基于配置管理器，支持 API Key 热更新。"""
 import json
 import logging
-from typing import Optional
+from typing import Optional, Tuple
 
 try:
     from openai import OpenAI
@@ -9,29 +9,65 @@ try:
 except ImportError:
     HAS_OPENAI = False
 
-from app.config import CONDITION_DESCRIPTIONS, DEFAULT_CONDITION_DESCRIPTION, CONFIDENCE_DESCRIPTIONS
+from app.config import (
+    CONDITION_DESCRIPTIONS,
+    DEFAULT_CONDITION_DESCRIPTION,
+    CONFIDENCE_DESCRIPTIONS,
+    CONDITION_FACTORS,
+    DEFAULT_CONDITION_FACTOR,
+    CATEGORIES,
+    CONDITIONS,
+)
+from app.services.config_manager import get_config_manager
 
 logger = logging.getLogger(__name__)
 
-DASHSCOPE_API_KEY = os.getenv('DASHSCOPE_API_KEY', '')
-DASHSCOPE_BASE_URL = os.getenv('DASHSCOPE_BASE_URL', 'https://dashscope.aliyuncs.com/compatible-mode/v1')
-MODEL_NAME = os.getenv('LLM_MODEL', 'qwen-plus')
-
 
 class LLMService:
+    """大模型服务，支持配置热更新。"""
+
     def __init__(self):
-        self.client = None
-        if DASHSCOPE_API_KEY and HAS_OPENAI:
-            self.client = OpenAI(
-                api_key=DASHSCOPE_API_KEY,
-                base_url=DASHSCOPE_BASE_URL,
-            )
-            logger.info('已初始化，模型: %s', MODEL_NAME)
-        else:
-            logger.warning('未配置 API Key，使用模板生成理由')
+        self._client = None
+        self._current_api_key = ''
+        self._current_base_url = ''
+        self._init_client()
+
+    def _init_client(self) -> None:
+        """根据当前配置初始化 OpenAI 客户端。"""
+        config = get_config_manager().get_config()
+        api_key = config.get('api_key', '')
+        base_url = config.get('base_url', '')
+
+        if not api_key or not HAS_OPENAI:
+            self._client = None
+            logger.warning('未配置 API Key 或缺少 openai 库，使用模板生成')
+            return
+
+        self._client = OpenAI(api_key=api_key, base_url=base_url)
+        self._current_api_key = api_key
+        self._current_base_url = base_url
+        logger.info('大模型客户端初始化成功，模型: %s', config.get('model_name'))
+
+    def _ensure_client(self) -> None:
+        """确保客户端与当前配置一致，配置变更时重新初始化。"""
+        config = get_config_manager().get_config()
+        api_key = config.get('api_key', '')
+        base_url = config.get('base_url', '')
+
+        if api_key != self._current_api_key or base_url != self._current_base_url:
+            logger.info('检测到配置变更，重新初始化客户端')
+            self._init_client()
+
+    def _get_model_name(self) -> str:
+        """获取当前配置的模型名称。"""
+        return get_config_manager().get_config().get('model_name', 'qwen-plus')
+
+    def _get_vision_model_name(self) -> str:
+        """获取当前配置的视觉模型名称。"""
+        return get_config_manager().get_config().get('vision_model', 'qwen3-vl-plus')
 
     def _build_comparables_summary(self, comparables: list) -> str:
-        """构建参考商品摘要"""
+        """构建参考商品摘要。"""
         if not comparables:
             return ''
         prices = [f"¥{p['price_cny']}" for p in comparables[:5]]
@@ -40,15 +76,36 @@ class LLMService:
     def generate_reasoning(self, product_name: str, category: str, condition: str,
                             suggested_price: float, price_min: float, price_max: float,
                             confidence: str, comparables: list) -> str:
-        """生成定价理由"""
-        if not self.client:
+        """生成定价理由，优先使用大模型，失败时降级为模板。"""
+        self._ensure_client()
+        if not self._client:
             return self._template_reasoning(product_name, category, condition,
                                              suggested_price, price_min, price_max,
                                              confidence, comparables)
 
         try:
             comparables_summary = self._build_comparables_summary(comparables)
-            prompt = f"""你是一个二手商品定价专家。请根据以下信息，用中文生成一段简洁的定价理由（50-100字）。
+            prompt = self._build_reasoning_prompt(product_name, category, condition,
+                                                    suggested_price, price_min, price_max,
+                                                    confidence, comparables_summary)
+            response = self._client.chat.completions.create(
+                model=self._get_model_name(),
+                messages=[{'role': 'user', 'content': prompt}],
+                temperature=0.7,
+                max_tokens=200,
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            logger.error('大模型调用失败: %s', e, exc_info=True)
+            return self._template_reasoning(product_name, category, condition,
+                                             suggested_price, price_min, price_max,
+                                             confidence, comparables)
+
+    def _build_reasoning_prompt(self, product_name: str, category: str, condition: str,
+                                 suggested_price: float, price_min: float, price_max: float,
+                                 confidence: str, comparables_summary: str) -> str:
+        """构建定价理由生成的 prompt。"""
+        return f"""你是一个二手商品定价专家。请根据以下信息，用中文生成一段简洁的定价理由（50-100字）。
 
 商品信息：
 - 名称：{product_name}
@@ -69,27 +126,36 @@ class LLMService:
 
 只输出理由正文，不要输出标题或额外解释。"""
 
-            response = self.client.chat.completions.create(
-                model=MODEL_NAME,
-                messages=[{'role': 'user', 'content': prompt}],
-                temperature=0.7,
-                max_tokens=200,
-            )
-            return response.choices[0].message.content.strip()
-        except Exception as e:
-            logger.error('大模型调用失败: %s', e, exc_info=True)
-            return self._template_reasoning(product_name, category, condition,
-                                             suggested_price, price_min, price_max,
-                                             confidence, comparables)
-
     def adjust_price(self, product_name: str, current_price: float, message: str,
-                     category: str, condition: str) -> tuple:
-        """对话式价格调整，返回 (new_price, reasoning)"""
-        if not self.client:
+                     category: str, condition: str) -> Tuple[float, str]:
+        """对话式价格调整，返回 (new_price, reasoning)。"""
+        self._ensure_client()
+        if not self._client:
             return self._template_adjust(product_name, current_price, message, category, condition)
 
         try:
-            prompt = f"""你是一个二手商品定价专家。用户希望根据以下反馈调整价格。
+            prompt = self._build_adjust_prompt(product_name, current_price, message,
+                                                category, condition)
+            response = self._client.chat.completions.create(
+                model=self._get_model_name(),
+                messages=[{'role': 'user', 'content': prompt}],
+                temperature=0.5,
+                max_tokens=150,
+                response_format={'type': 'json_object'},
+            )
+            content = response.choices[0].message.content.strip()
+            result = json.loads(content)
+            new_price = float(result.get('new_price', current_price))
+            reasoning = result.get('reasoning', '根据您的反馈调整价格。')
+            return new_price, reasoning
+        except Exception as e:
+            logger.error('价格调整失败: %s', e, exc_info=True)
+            return self._template_adjust(product_name, current_price, message, category, condition)
+
+    def _build_adjust_prompt(self, product_name: str, current_price: float, message: str,
+                              category: str, condition: str) -> str:
+        """构建价格调整的 prompt。"""
+        return f"""你是一个二手商品定价专家。用户希望根据以下反馈调整价格。
 
 商品：{product_name}
 品类：{category}
@@ -105,25 +171,205 @@ class LLMService:
 - 配件齐全/成色好/涨价：上调 5%-15%
 - 其他情况：微调 0%-5%"""
 
-            response = self.client.chat.completions.create(
-                model=MODEL_NAME,
-                messages=[{'role': 'user', 'content': prompt}],
-                temperature=0.5,
-                max_tokens=150,
+    # ============ 视觉识别 ============
+
+    # 视觉模型对 base64 长度有限制，过大的图直接拒绝，避免请求体爆炸
+    MAX_IMAGE_B64_LENGTH = 8 * 1024 * 1024
+
+    def recognize_product(self, image_b64: str) -> Optional[dict]:
+        """视觉识别：从商品图片中识别名称、品类、成色。
+
+        返回 {'product_name','category','condition','brand','notes'}，失败返回 None。
+        """
+        self._ensure_client()
+        if not self._client:
+            logger.warning('未配置 API Key，跳过视觉识别')
+            return None
+
+        image_url = self._normalize_image_data(image_b64)
+        if not image_url:
+            return None
+
+        try:
+            response = self._client.chat.completions.create(
+                model=self._get_vision_model_name(),
+                messages=[{
+                    'role': 'user',
+                    'content': [
+                        {'type': 'image_url', 'image_url': {'url': image_url}},
+                        {'type': 'text', 'text': self._build_recognize_prompt()},
+                    ],
+                }],
+                temperature=0.2,
+                max_tokens=300,
                 response_format={'type': 'json_object'},
             )
             content = response.choices[0].message.content.strip()
             result = json.loads(content)
-            new_price = float(result.get('new_price', current_price))
-            reasoning = result.get('reasoning', '根据您的反馈调整价格。')
-            return new_price, reasoning
         except Exception as e:
-            logger.error('价格调整失败: %s', e, exc_info=True)
-            return self._template_adjust(product_name, current_price, message, category, condition)
+            logger.error('视觉识别失败: %s', e, exc_info=True)
+            return None
 
-    def _template_reasoning(self, product_name, category, condition,
-                             suggested_price, price_min, price_max, confidence, comparables):
-        """模板生成理由（无大模型时使用）"""
+        return self._normalize_recognize_result(result)
+
+    def _normalize_image_data(self, image_b64: str) -> Optional[str]:
+        """把前端传来的 base64 归一化为 data URL，非法输入返回 None。"""
+        if not image_b64 or not isinstance(image_b64, str):
+            return None
+
+        raw = image_b64.strip()
+        if raw.startswith('data:'):
+            # 已带前缀，校验一下是不是图片
+            if ';base64,' not in raw:
+                return None
+            mime = raw[5:raw.index(';base64,')]
+            if not mime.startswith('image/'):
+                return None
+            if len(raw) > self.MAX_IMAGE_B64_LENGTH:
+                logger.warning('图片过大，拒绝识别: %d 字符', len(raw))
+                return None
+            return raw
+
+        if len(raw) > self.MAX_IMAGE_B64_LENGTH:
+            logger.warning('图片过大，拒绝识别: %d 字符', len(raw))
+            return None
+        return 'data:image/jpeg;base64,' + raw
+
+    def _build_recognize_prompt(self) -> str:
+        """构建视觉识别的 prompt。"""
+        return f"""你是一个二手商品识别专家。请仔细看这张商品图片，提取以下信息。
+
+只输出 JSON，格式：
+{{"product_name": "商品名称，含品牌和型号，10-25字", "category": "品类", "condition": "成色", "brand": "品牌", "notes": "图片可见的外观细节、瑕疵、配件，30字以内"}}
+
+品类必须是且只能是以下之一：{'、'.join(CATEGORIES)}
+成色必须是且只能是以下之一：{'、'.join(CONDITIONS)}
+
+判断成色的依据：
+- 包装未拆、无任何痕迹 -> 全新
+- 几乎无痕迹、成色很新 -> 几乎全新
+- 有轻微划痕、磕碰或使用痕迹 -> 轻微使用痕迹
+- 明显磨损、掉漆、破损 -> 有明显使用痕迹
+
+注意：
+- 看不清或不确定的字段填空字符串，不要猜
+- product_name 要具体到型号，例如「Apple iPhone 13 128G 蓝色」而不是「手机」
+- notes 只描述图片里真实可见的内容，不要编造
+- 如果图片不是商品（例如风景、人像、截图），product_name 填「非商品图片」，其余留空"""
+
+    def _normalize_recognize_result(self, result: dict) -> dict:
+        """把模型输出归一化：品类和成色对齐到合法枚举值。"""
+        if not isinstance(result, dict):
+            return {}
+
+        category = str(result.get('category', '') or '').strip()
+        condition = str(result.get('condition', '') or '').strip()
+
+        return {
+            'product_name': str(result.get('product_name', '') or '').strip()[:60],
+            'category': category if category in CATEGORIES else '',
+            'condition': condition if condition in CONDITIONS else '',
+            'brand': str(result.get('brand', '') or '').strip()[:30],
+            'notes': str(result.get('notes', '') or '').strip()[:120],
+        }
+
+    def estimate_price(self, product_name: str, category: str, condition: str) -> Tuple[float, float, float, str]:
+        """
+        无匹配数据时，用大模型估算价格。
+        返回: (suggested_price, price_min, price_max, reasoning)
+        """
+        if not self._client:
+            return self._template_estimate(product_name, category, condition)
+
+        try:
+            prompt = self._build_estimate_prompt(product_name, category, condition)
+            response = self._client.chat.completions.create(
+                model=self._get_model_name(),
+                messages=[{'role': 'user', 'content': prompt}],
+                temperature=0.5,
+                max_tokens=200,
+                response_format={'type': 'json_object'},
+            )
+            content = response.choices[0].message.content.strip()
+            result = json.loads(content)
+            suggested_price = float(result.get('suggested_price', 0))
+            price_min = float(result.get('price_min', suggested_price * 0.8))
+            price_max = float(result.get('price_max', suggested_price * 1.2))
+            reasoning = result.get('reasoning', '基于大模型估算')
+            if suggested_price <= 0:
+                return self._template_estimate(product_name, category, condition)
+            return suggested_price, price_min, price_max, reasoning
+        except Exception as e:
+            logger.error('大模型估算价格失败: %s', e, exc_info=True)
+            return self._template_estimate(product_name, category, condition)
+
+    def _build_estimate_prompt(self, product_name: str, category: str, condition: str) -> str:
+        """构建无数据时价格估算的 prompt。"""
+        return f"""你是一个校园二手商品定价专家。请根据以下信息，估算该商品在校园二手市场的合理价格。
+
+商品名称：{product_name}
+品类：{category or '未分类'}
+成色：{condition}
+
+请参考：
+1. 该商品新品的市场价格
+2. 二手商品的折旧率（全新90%、几乎全新80%、轻微使用65%、明显使用50%）
+3. 校园学生的消费能力和价格敏感度
+
+输出JSON格式：
+{{"suggested_price": 数字, "price_min": 数字, "price_max": 数字, "reasoning": "估算理由（50字以内）"}}
+
+注意：
+- 价格单位为人民币元
+- 低值商品（如矿泉水、零食）价格应在1-10元
+- 化妆品/护肤品应考虑品牌溢价
+- 数码产品应参考当前市场价格"""
+
+    def _template_estimate(self, product_name: str, category: str, condition: str) -> Tuple[float, float, float, str]:
+        """无大模型时，按商品名称关键词判断品类，给出粗略估算价。"""
+        detected_category = self._detect_category_by_keywords(product_name, category)
+        category_base_prices = {
+            '手机数码': 1500,
+            '电脑平板': 2500,
+            '教材书籍': 20,
+            '生活用品': 30,
+            '食品饮料': 5,
+            '化妆品': 200,
+            '服饰鞋包': 100,
+            '运动户外': 200,
+            '其他': 80,
+        }
+        base_price = category_base_prices.get(detected_category, 80)
+        condition_factor = CONDITION_FACTORS.get(condition, DEFAULT_CONDITION_FACTOR)
+        suggested_price = round(base_price * condition_factor, 0)
+        price_min = round(suggested_price * 0.7, 0)
+        price_max = round(suggested_price * 1.3, 0)
+        reasoning = f'暂无匹配数据，基于{detected_category}品类基准价¥{base_price}按{condition}成色估算，仅供参考。'
+        return suggested_price, price_min, price_max, reasoning
+
+    def _detect_category_by_keywords(self, product_name: str, default_category: str) -> str:
+        """根据商品名称关键词判断品类。"""
+        keyword_mapping = {
+            '食品饮料': ['矿泉水', '水', '饮料', '可乐', '雪碧', '零食', '饼干', '泡面', '牛奶', '咖啡', '茶', '烟', '酒'],
+            '化妆品': ['香奈儿', '口红', '粉饼', '粉底', '面膜', '香水', '护肤', '化妆', '眼影', '腮红', '精华', '乳液'],
+            '手机数码': ['手机', 'iphone', '苹果', '华为', '小米', 'oppo', 'vivo', '耳机', '蓝牙', '充电器', '数据线', '充电宝', '相机'],
+            '电脑平板': ['电脑', '笔记本', 'macbook', '平板', 'ipad', '键盘', '鼠标', '显示器', '硬盘', 'u盘'],
+            '教材书籍': ['教材', '书', '课本', '考研', '英语', '数学', '习题', '试卷', '小说'],
+            '运动户外': ['篮球', '足球', '羽毛球', '跑步', '健身', '瑜伽', '自行车', '滑板', '帐篷'],
+            '服饰鞋包': ['衣服', '裤子', '裙子', '鞋', '包', '帽子', '围巾', '羽绒服', 't恤', '衬衫'],
+            '生活用品': ['台灯', '收纳', '衣架', '被子', '枕头', '水杯', '雨伞', '镜子', '梳子', '纸巾'],
+        }
+        product_lower = product_name.lower()
+        for cat, keywords in keyword_mapping.items():
+            for kw in keywords:
+                if kw in product_lower:
+                    return cat
+        return default_category or '其他'
+
+    def _template_reasoning(self, product_name: str, category: str, condition: str,
+                             suggested_price: float, price_min: float, price_max: float,
+                             confidence: str, comparables: list) -> str:
+        """模板生成理由（无大模型时使用）。"""
         comparables_text = ''
         if comparables:
             avg_price = sum(p['price_cny'] for p in comparables) / len(comparables)
@@ -134,8 +380,9 @@ class LLMService:
 
         return f'{comparables_text}{condition_text}，综合得出建议价格¥{suggested_price}。价格区间¥{price_min}~¥{price_max}反映市场波动。{confidence_text}。'
 
-    def _template_adjust(self, product_name, current_price, message, category, condition):
-        """模板调整价格（无大模型时使用）"""
+    def _template_adjust(self, product_name: str, current_price: float, message: str,
+                         category: str, condition: str) -> Tuple[float, str]:
+        """模板调整价格（无大模型时使用）。"""
         adjustment = self._detect_adjustment_intent(message)
         new_price = round(current_price * (1 + adjustment), 0)
 
@@ -148,7 +395,7 @@ class LLMService:
         return new_price, reasoning
 
     def _detect_adjustment_intent(self, message: str) -> float:
-        """识别调整意图，返回调整比例"""
+        """识别调整意图，返回调整比例。"""
         decrease_keywords = ['急', '便宜', '低', '降', '快', '甩']
         increase_keywords = ['贵', '高', '涨', '齐全', '好', '新']
 
@@ -163,6 +410,7 @@ _llm_service = None
 
 
 def get_llm_service() -> LLMService:
+    """获取大模型服务单例。"""
     global _llm_service
     if _llm_service is None:
         _llm_service = LLMService()

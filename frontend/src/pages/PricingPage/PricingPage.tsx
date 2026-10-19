@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Search, Sparkles, Tag, Upload, MessageSquare, RefreshCw, CheckCircle2, AlertCircle, Info, X } from 'lucide-react'
+import { Search, Sparkles, Tag, Upload, MessageSquare, RefreshCw, CheckCircle2, AlertCircle, Info, X, Loader2, ScanLine } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -15,17 +15,93 @@ import { pricingService, type PricingResult, type AdjustRequest } from '@/servic
 const CONDITIONS = ['全新', '几乎全新', '轻微使用痕迹', '有明显使用痕迹']
 const CATEGORIES = ['手机数码', '电脑平板', '教材书籍', '生活用品', '服饰鞋包', '运动户外', '其他']
 
+/** 上传图片压到该边长以内，过大的图会让请求体爆炸 */
+const MAX_IMAGE_EDGE = 1024
+
+/** 把图片文件压缩为 base64 data URL，失败时 reject */
+function compressImage(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onerror = () => reject(new Error('文件读取失败'))
+    reader.onload = () => {
+      const img = new Image()
+      img.onerror = () => reject(new Error('图片解析失败'))
+      img.onload = () => {
+        let width = img.naturalWidth
+        let height = img.naturalHeight
+        if (width > MAX_IMAGE_EDGE || height > MAX_IMAGE_EDGE) {
+          const ratio = Math.min(MAX_IMAGE_EDGE / width, MAX_IMAGE_EDGE / height)
+          width = Math.round(width * ratio)
+          height = Math.round(height * ratio)
+        }
+        const canvas = document.createElement('canvas')
+        canvas.width = width
+        canvas.height = height
+        const ctx = canvas.getContext('2d')
+        if (!ctx) {
+          reject(new Error('画布不可用'))
+          return
+        }
+        // 铺白底，避免透明区域压成黑色
+        ctx.fillStyle = '#ffffff'
+        ctx.fillRect(0, 0, width, height)
+        ctx.drawImage(img, 0, 0, width, height)
+        resolve(canvas.toDataURL('image/jpeg', 0.85))
+      }
+      img.src = reader.result as string
+    }
+    reader.readAsDataURL(file)
+  })
+}
+
 export default function PricingPage() {
   const [productName, setProductName] = useState('')
   const [category, setCategory] = useState('')
   const [condition, setCondition] = useState('几乎全新')
   const [image, setImage] = useState<File | null>(null)
   const [imagePreview, setImagePreview] = useState<string | null>(null)
+  const [recognizing, setRecognizing] = useState(false)
+  const [recognizedNotes, setRecognizedNotes] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<PricingResult | null>(null)
   const [adjustMessage, setAdjustMessage] = useState('')
   const [adjustLoading, setAdjustLoading] = useState(false)
+
+  const clearImage = () => {
+    setImage(null)
+    setImagePreview(null)
+    setRecognizedNotes('')
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
+
+  const handleFileChange = async (file: File) => {
+    setImage(file)
+    setImagePreview(URL.createObjectURL(file))
+    setRecognizedNotes('')
+
+    setRecognizing(true)
+    try {
+      const base64 = await compressImage(file)
+      const res = await pricingService.recognizeImage(base64)
+      if (res.success) {
+        if (res.product_name) setProductName(res.product_name)
+        if (res.category) setCategory(res.category)
+        if (res.condition) setCondition(res.condition)
+        setRecognizedNotes(res.notes || '')
+        toast.success(`已识别：${res.product_name}`, {
+          description: res.notes || '信息已自动填入，可手动修改',
+        })
+      } else {
+        toast.info(res.message || '没能识别图片，请手动填写商品信息')
+      }
+    } catch (e) {
+      console.error(e)
+      toast.info('识别服务暂时不可用，请手动填写商品信息')
+    } finally {
+      setRecognizing(false)
+    }
+  }
 
   const handleSubmit = async () => {
     if (!productName.trim()) return
@@ -80,6 +156,37 @@ export default function PricingPage() {
     return '低置信度 · 估算'
   }
 
+  const isHighRisk = result?.risk_check?.risk_level === 'high'
+  const isMediumRisk = result?.risk_check?.risk_level === 'medium'
+
+  const renderRiskWarning = () => {
+    if (!result?.risk_check || result.risk_check.risk_level === 'low') return null
+    const { risk_level, message, matched_words } = result.risk_check
+    const isHigh = risk_level === 'high'
+    return (
+      <div className={`rounded-lg p-4 border ${isHigh ? 'bg-red-50 border-red-200' : 'bg-yellow-50 border-yellow-200'}`}>
+        <div className="flex items-start gap-2">
+          <AlertCircle className={`w-5 h-5 mt-0.5 flex-shrink-0 ${isHigh ? 'text-red-500' : 'text-yellow-500'}`} />
+          <div className="flex-1">
+            <p className={`text-sm font-medium ${isHigh ? 'text-red-800' : 'text-yellow-800'}`}>
+              {isHigh ? '⚠️ 风险拦截' : '⚠️ 风险提示'}
+            </p>
+            <p className={`text-sm mt-1 ${isHigh ? 'text-red-700' : 'text-yellow-700'}`}>{message}</p>
+            {matched_words && matched_words.length > 0 && (
+              <div className="flex flex-wrap gap-1 mt-2">
+                {matched_words.slice(0, 5).map((word, idx) => (
+                  <span key={idx} className={`text-xs px-2 py-0.5 rounded ${isHigh ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                    {word}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50">
       <Toaster position="top-right" />
@@ -89,8 +196,8 @@ export default function PricingPage() {
             <Tag className="w-5 h-5 text-white" />
           </div>
           <div>
-            <h1 className="text-xl font-bold">AI定价+风控助手</h1>
-            <p className="text-sm text-gray-500">二手商品智能估价 + 交易风控 · AI-Native</p>
+            <h1 className="text-xl font-bold">AI 定价助手</h1>
+            <p className="text-sm text-gray-500">二手商品智能估价 · AI-Native</p>
           </div>
         </div>
       </header>
@@ -142,17 +249,41 @@ export default function PricingPage() {
               </div>
             </div>
             <div className="space-y-2">
-              <Label>商品图片（可选）</Label>
+              <Label>商品图片（可选，上传后自动识别）</Label>
               {imagePreview ? (
-                <div className="relative inline-block">
-                  <img src={imagePreview} alt="预览" className="w-32 h-32 object-cover rounded-lg border" />
-                  <button
-                    type="button"
-                    onClick={() => { setImage(null); setImagePreview(null); if (fileInputRef.current) fileInputRef.current.value = '' }}
-                    className="absolute -top-2 -right-2 w-6 h-6 bg-red-500 text-white rounded-full flex items-center justify-center hover:bg-red-600"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
+                <div className="flex items-start gap-3">
+                  <div className="relative inline-block">
+                    <img src={imagePreview} alt="预览" className="w-32 h-32 object-cover rounded-lg border" />
+                    <button
+                      type="button"
+                      onClick={clearImage}
+                      className="absolute -top-2 -right-2 w-6 h-6 bg-red-500 text-white rounded-full flex items-center justify-center hover:bg-red-600"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                    {recognizing && (
+                      <div className="absolute inset-0 rounded-lg bg-black/50 flex flex-col items-center justify-center gap-1">
+                        <Loader2 className="w-6 h-6 text-white animate-spin" />
+                        <span className="text-xs text-white">识别中</span>
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex-1 text-sm">
+                    {recognizing ? (
+                      <p className="text-gray-500 flex items-center gap-1.5">
+                        <ScanLine className="w-4 h-4" />
+                        正在用视觉模型读图，识别商品名称、品类和成色…
+                      </p>
+                    ) : recognizedNotes ? (
+                      <div className="rounded-lg bg-blue-50 border border-blue-100 p-2.5 text-blue-800">
+                        <p className="font-medium mb-0.5">图片识别到的细节</p>
+                        <p>{recognizedNotes}</p>
+                        <p className="text-xs text-blue-600 mt-1">以上信息已填入表单，可手动修改后再估价</p>
+                      </div>
+                    ) : (
+                      <p className="text-gray-400">图片已就绪</p>
+                    )}
+                  </div>
                 </div>
               ) : (
                 <div
@@ -160,7 +291,7 @@ export default function PricingPage() {
                   onClick={() => fileInputRef.current?.click()}
                 >
                   <Upload className="w-8 h-8 mx-auto text-gray-400 mb-2" />
-                  <p className="text-sm text-gray-500">点击或拖拽上传图片</p>
+                  <p className="text-sm text-gray-500">点击上传图片，自动识别商品信息</p>
                   <input
                     ref={fileInputRef}
                     type="file"
@@ -168,10 +299,7 @@ export default function PricingPage() {
                     className="hidden"
                     onChange={(e) => {
                       const file = e.target.files?.[0]
-                      if (file) {
-                        setImage(file)
-                        setImagePreview(URL.createObjectURL(file))
-                      }
+                      if (file) handleFileChange(file)
                     }}
                   />
                 </div>
@@ -212,13 +340,25 @@ export default function PricingPage() {
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-6">
+                  {renderRiskWarning()}
+
+                  {isHighRisk ? (
+                    <div className="text-center py-8">
+                      <div className="w-16 h-16 mx-auto rounded-full bg-red-100 flex items-center justify-center mb-4">
+                        <AlertCircle className="w-8 h-8 text-red-500" />
+                      </div>
+                      <p className="text-lg font-medium text-red-700">该商品涉嫌违规，无法提供定价服务</p>
+                      <p className="text-sm text-red-500 mt-2">请修改商品信息后重新尝试</p>
+                    </div>
+                  ) : (
+                    <>
                   <div className="text-center py-4">
                     <p className="text-sm text-gray-500 mb-1">建议价格</p>
                     <p className="text-5xl font-bold text-blue-600">
-                      ¥{result.suggested_price}
+                      {result.suggested_price > 0 ? `¥${result.suggested_price}` : '--'}
                     </p>
                     <p className="text-sm text-gray-400 mt-2">
-                      区间：¥{result.price_min} ~ ¥{result.price_max}
+                      区间：{result.price_min > 0 ? `¥${result.price_min} ~ ¥${result.price_max}` : '--'}
                     </p>
                   </div>
 
@@ -263,7 +403,10 @@ export default function PricingPage() {
                       </p>
                     </div>
                   )}
+                    </>
+                  )}
 
+                  {!isHighRisk && (
                   <div className="space-y-3 pt-4 border-t">
                     <Label className="flex items-center gap-2">
                       <MessageSquare className="w-4 h-4" />
@@ -288,6 +431,7 @@ export default function PricingPage() {
                       )}
                     </Button>
                   </div>
+                  )}
                 </CardContent>
               </Card>
             </motion.div>

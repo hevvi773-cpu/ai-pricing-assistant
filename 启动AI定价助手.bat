@@ -20,6 +20,7 @@ if %errorlevel% neq 0 (
 
 echo.
 echo [2/3] 启动应用容器...
+echo 首次启动会自动构建镜像（需联网，约 3-10 分钟），之后每次秒开
 cd /d "%~dp0"
 docker-compose up -d >nul 2>&1
 if %errorlevel% neq 0 (
@@ -39,11 +40,12 @@ echo.
 echo ========================================
 echo    启动成功！
 echo    前端: http://localhost:3000
+echo    后台管理: http://localhost:3000/admin.html
 echo    后端: http://localhost:8000
 echo ========================================
 echo.
 echo 提示：关闭本窗口不会停止应用
-echo 如需停止，请运行"停止应用.bat"
+echo 如需停止，请运行"停止AI定价助手.bat"
 echo.
 timeout /t 3 /nobreak >nul
 exit

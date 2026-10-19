@@ -115,7 +115,11 @@ class PricingEngine:
 
         if not comparables:
             base_price = 100.0
-            return base_price, base_price * 0.7, base_price * 1.3, 'low', []
+            condition_factor = CONDITION_FACTORS.get(condition, DEFAULT_CONDITION_FACTOR)
+            suggested_price = round(base_price * condition_factor, 0)
+            price_min = round(suggested_price * 0.7, 0)
+            price_max = round(suggested_price * 1.3, 0)
+            return suggested_price, price_min, price_max, 'low', []
 
         prices = [p['price_cny'] for p in comparables]
         condition_factor = CONDITION_FACTORS.get(condition, DEFAULT_CONDITION_FACTOR)

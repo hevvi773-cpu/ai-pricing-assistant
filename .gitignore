@@ -12,7 +12,8 @@ build/
 .env.local
 .env.*.local
 
-# Data files (large) - mercari_cleaned.json 已纳入仓库（RAG 数据集）
+# Data files (large)
+data/mercari_cleaned.json
 data/*.tsv
 data/*.7z
 data/*.zip
@@ -31,5 +32,15 @@ Thumbs.db
 *.log
 npm-debug.log*
 
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
 # Docker
 docker-compose.override.yml
+
+# 本地大模型配置，含 API Key，禁止入库
+backend/app/config/llm_config.json
